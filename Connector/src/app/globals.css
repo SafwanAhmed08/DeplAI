@@ -1,0 +1,61 @@
+/* Import custom fonts */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
+
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #f8fafc;
+  --foreground: #1e293b;
+  --surface: #ffffff;
+  --surface-hover: #f1f5f9;
+  --muted: #64748b;
+  --border: #e2e8f0;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --font-sans: 'Noto Sans', sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: #000000;
+    --foreground: #f1f5f9;
+    --surface: #0a0a0a;
+    --surface-hover: #1a1a1a;
+    --muted: #94a3b8;
+    --border: #1f1f1f;
+  }
+}
+
+/* Class-based dark mode toggle */
+:root.dark {
+  --background: #000000;
+  --foreground: #f1f5f9;
+  --surface: #0a0a0a;
+  --surface-hover: #1a1a1a;
+  --muted: #94a3b8;
+  --border: #1f1f1f;
+}
+
+:root.light {
+  --background: #f8fafc;
+  --foreground: #1e293b;
+  --surface: #ffffff;
+  --surface-hover: #f1f5f9;
+  --muted: #64748b;
+  --border: #e2e8f0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Noto Sans', sans-serif;
+}
+
