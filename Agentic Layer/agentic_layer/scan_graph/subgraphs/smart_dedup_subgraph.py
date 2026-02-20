@@ -8,6 +8,8 @@ from langgraph.graph import END
 from langgraph.graph import START
 from langgraph.graph import StateGraph
 
+from agentic_layer.shared.owasp_mapper import get_owasp_id
+from agentic_layer.shared.owasp_mapper import normalize_owasp_category
 from agentic_layer.scan_graph.logger import log_agent
 from agentic_layer.scan_graph.state import ScanState
 from agentic_layer.scan_graph.state import merge_state
@@ -29,13 +31,6 @@ def _normalize_severity(value: str | None) -> str:
 def _token_set(text: str) -> set[str]:
     normalized = "".join(ch if ch.isalnum() else " " for ch in text.lower())
     return {token for token in normalized.split() if token}
-
-
-def _owasp_id(category: str | None) -> str:
-    if not category:
-        return "A00"
-    prefix = category.split(":", 1)[0].strip()
-    return prefix if prefix.startswith("A") else "A00"
 
 
 def _severity_rank(level: str) -> int:
@@ -128,7 +123,8 @@ async def schema_mapper_node(state: ScanState) -> ScanState:
         payload = artifact.get("parsed_payload", {})
         title = payload.get("title") or payload.get("message") or "Untitled finding"
         description = payload.get("description") or payload.get("reasoning") or payload.get("message") or title
-        category = payload.get("category") or payload.get("owasp_category") or "A04:2021-Insecure Design"
+        category_input = payload.get("category") or payload.get("owasp_category") or payload.get("category_hint")
+        category = normalize_owasp_category(str(category_input) if category_input is not None else None)
         evidence = payload.get("evidence") or payload.get("snippet") or "No evidence provided"
         file_path = payload.get("file_path") or payload.get("file") or ""
         line_number = int(payload.get("line_number") or payload.get("line") or 0)
@@ -154,6 +150,7 @@ async def schema_mapper_node(state: ScanState) -> ScanState:
                 "tool_sources": [str(item) for item in provenance if item],
                 "confidence": round(confidence, 2),
                 "reasoning": str(reasoning),
+                "origin_parser": str(payload.get("origin_parser") or "native"),
             }
         )
 
@@ -170,13 +167,12 @@ async def schema_mapper_node(state: ScanState) -> ScanState:
 async def owasp_tagger_node(state: ScanState) -> ScanState:
     tagged: list[dict[str, Any]] = []
     for finding in state["unified_findings"]:
-        category = finding["category"].strip()
-        normalized_category = category if ":" in category else f"{_owasp_id(category)}:2021-Unknown"
+        normalized_category = normalize_owasp_category(finding.get("category"))
         tagged.append(
             {
                 **finding,
                 "category": normalized_category,
-                "owasp_id": _owasp_id(normalized_category),
+                "owasp_id": get_owasp_id(normalized_category),
             }
         )
 
@@ -368,14 +364,23 @@ async def severity_adjuster_node(state: ScanState) -> ScanState:
         base_rank = _severity_rank(_normalize_severity(representative.get("severity")))
         tool_count = len(cluster.get("tool_sources", []))
         confidence = float(cluster.get("average_confidence", 0.5))
-        owasp = _owasp_id(representative.get("category"))
+        owasp = get_owasp_id(representative.get("category"))
 
         adjusted_rank = base_rank
-        if tool_count >= 2:
-            adjusted_rank += 1
-        if confidence >= 0.75:
-            adjusted_rank += 1
-        adjusted_rank += CATEGORY_BONUS.get(owasp, 0)
+        origin_parser = str(representative.get("origin_parser") or "native").lower()
+        if origin_parser == "fallback":
+            adjusted_rank = _severity_rank("info")
+            log_agent(state["scan_id"], "SeverityAdjuster", "Escalation skipped")
+        elif confidence < 0.6:
+            log_agent(state["scan_id"], "SeverityAdjuster", "Skipped escalation due to low confidence")
+            log_agent(state["scan_id"], "SeverityAdjuster", "Escalation skipped")
+        elif confidence >= 0.8:
+            if tool_count >= 2:
+                adjusted_rank += 1
+            adjusted_rank += CATEGORY_BONUS.get(owasp, 0)
+            log_agent(state["scan_id"], "SeverityAdjuster", "Escalation allowed")
+        else:
+            log_agent(state["scan_id"], "SeverityAdjuster", "Escalation skipped")
 
         intelligent.append(
             {

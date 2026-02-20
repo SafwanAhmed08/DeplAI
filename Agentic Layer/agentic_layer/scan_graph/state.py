@@ -8,6 +8,8 @@ from typing import Any
 from typing import TypedDict
 from uuid import uuid4
 
+from agentic_layer.scan_graph.logger import log_agent
+
 
 class PhaseStatus(str, Enum):
     NOT_STARTED = "not_started"
@@ -15,6 +17,10 @@ class PhaseStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class SecurityError(RuntimeError):
+    pass
 
 
 class ScanState(TypedDict):
@@ -63,23 +69,39 @@ class ScanState(TypedDict):
     phase_timeline: list[dict[str, str]]
 
 
+def _ensure_no_secret_state_keys(state_like: dict[str, Any]) -> None:
+    allowed_secret_like_keys = {"github_token"}
+    forbidden_keys = [
+        key
+        for key in state_like.keys()
+        if ("token" in key.lower() or "key" in key.lower()) and key not in allowed_secret_like_keys
+    ]
+    if forbidden_keys:
+        raise SecurityError(f"Forbidden secret-like key(s) in state: {', '.join(sorted(forbidden_keys))}")
+
+
 def merge_state(old_state: ScanState, updates: dict[str, Any]) -> ScanState:
     # LangGraph nodes should treat state as immutable snapshots.
     # We deep-copy to avoid in-place mutation bugs between nodes.
+    allowed_secret_like_keys = {"github_token"}
     next_state = deepcopy(old_state)
     for key, value in updates.items():
+        if ("token" in key.lower() or "key" in key.lower()) and key not in allowed_secret_like_keys:
+            raise SecurityError(f"Forbidden secret-like key in state update: {key}")
         next_state[key] = value
+    _ensure_no_secret_state_keys(next_state)
+    log_agent(next_state["scan_id"], "SecurityGuard", "Secret persistence check passed")
     return next_state
 
 
-def build_initial_state(repo_url: str, github_token: str | None = None) -> ScanState:
+def build_initial_state(repo_url: str) -> ScanState:
     # Initial state is minimal and expanded by nodes over time.
     now = datetime.now(timezone.utc).isoformat()
-    return {
+    initial_state: ScanState = {
         "scan_id": str(uuid4()),
         "repo_url": repo_url,
         "repo_path": None,
-        "github_token": github_token,
+        "github_token": None,
         "repo_metadata": {},
         "docker_volumes": {},
         "requires_hitl": False,
@@ -119,6 +141,9 @@ def build_initial_state(repo_url: str, github_token: str | None = None) -> ScanS
             }
         ],
     }
+    _ensure_no_secret_state_keys(initial_state)
+    log_agent(initial_state["scan_id"], "SecurityGuard", "Secret persistence check passed")
+    return initial_state
 
 
 def append_timeline_event(state: ScanState, phase: str, event: str) -> ScanState:

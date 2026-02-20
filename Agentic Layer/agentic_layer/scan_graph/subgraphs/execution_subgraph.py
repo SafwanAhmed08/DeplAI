@@ -174,7 +174,9 @@ async def docker_executor_node(state: CategoryExecutionState) -> CategoryExecuti
                 "execution_time_ms": 0,
                 "stdout": "",
                 "stderr": str(exc),
+                "status": "failed",
                 "parsed_findings": [],
+                "summary": {},
             }
 
         parsed_findings = list(result["parsed_findings"])
@@ -188,9 +190,11 @@ async def docker_executor_node(state: CategoryExecutionState) -> CategoryExecuti
                 "execution_time_ms": result["execution_time_ms"],
                 "stdout": result["stdout"],
                 "stderr": result["stderr"],
+                "status": result.get("status", "failed"),
                 "parsed_findings": parsed_findings,
                 "findings": parsed_findings,
                 "confidence_score": average_confidence,
+                "summary": result.get("summary", {}),
             }
         )
 
@@ -207,6 +211,7 @@ async def execution_recorder_node(state: CategoryExecutionState) -> CategoryExec
         {
             "tool_name": output["tool_name"],
             "execution_time": output["execution_time_ms"],
+            "status": output.get("status", "failed"),
             "confidence": output["confidence_score"],
             "finding_count": len(output["findings"]),
         }
@@ -233,6 +238,7 @@ async def result_aggregator_node(state: CategoryExecutionState) -> CategoryExecu
                     "tool_provenance": finding["tool_provenance"],
                     "confidence": finding["confidence"],
                     "reasoning": finding["reasoning"],
+                    "origin_parser": finding.get("origin_parser", "strict_json"),
                 }
             )
 

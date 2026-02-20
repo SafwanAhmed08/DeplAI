@@ -97,13 +97,17 @@ class ToolRuntime:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             stdout = self._sanitize_output(completed.stdout)
             stderr = self._sanitize_output(completed.stderr)
-            parsed_findings = self._parse_findings(tool_name=tool_name, stdout=stdout, stderr=stderr)
+            contract = self._validate_and_parse_contract(tool_name=tool_name, exit_code=int(completed.returncode), stdout=stdout)
+            parsed_findings = contract["parsed_findings"]
+            status = contract["status"]
 
             log_agent(
                 self.scan_id,
                 "ToolRuntime",
                 f"Completed tool={tool_name} exit_code={completed.returncode}",
             )
+            if status == "completed":
+                log_agent(self.scan_id, "ToolRuntime", "Tool contract validation passed")
             log_agent(
                 self.scan_id,
                 "ToolRuntime",
@@ -115,7 +119,9 @@ class ToolRuntime:
                 "execution_time_ms": elapsed_ms,
                 "stdout": stdout,
                 "stderr": stderr,
+                "status": status,
                 "parsed_findings": parsed_findings,
+                "summary": contract["summary"],
             }
         except subprocess.TimeoutExpired as exc:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
@@ -128,7 +134,9 @@ class ToolRuntime:
                 "execution_time_ms": elapsed_ms,
                 "stdout": stdout,
                 "stderr": stderr,
+                "status": "failed",
                 "parsed_findings": [],
+                "summary": {},
             }
         except FileNotFoundError:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
@@ -140,7 +148,9 @@ class ToolRuntime:
                 "execution_time_ms": elapsed_ms,
                 "stdout": "",
                 "stderr": error,
+                "status": "failed",
                 "parsed_findings": [],
+                "summary": {},
             }
         except Exception as exc:  # noqa: BLE001
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
@@ -152,48 +162,42 @@ class ToolRuntime:
                 "execution_time_ms": elapsed_ms,
                 "stdout": "",
                 "stderr": message,
+                "status": "failed",
                 "parsed_findings": [],
+                "summary": {},
             }
 
-    def _parse_findings(self, tool_name: str, stdout: str, stderr: str) -> list[dict]:
-        if stdout:
-            try:
-                payload = json.loads(stdout)
-                findings = self._extract_findings_from_json(tool_name, payload)
-                if findings:
-                    return findings
-            except json.JSONDecodeError:
-                pass
+    def _validate_and_parse_contract(self, tool_name: str, exit_code: int, stdout: str) -> dict:
+        if exit_code != 0:
+            return {"status": "failed", "parsed_findings": [], "summary": {}}
+        if not stdout:
+            return {"status": "failed", "parsed_findings": [], "summary": {}}
 
-        snippet_source = stdout or stderr
-        snippet = (snippet_source[:500]).strip()
-        if not snippet:
-            return []
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return {"status": "failed", "parsed_findings": [], "summary": {}}
 
-        return [
-            {
-                "category": self._infer_category(tool_name),
-                "title": f"{tool_name} textual output",
-                "severity": self._infer_severity(tool_name),
-                "evidence": snippet,
-                "tool_provenance": tool_name,
-                "confidence": 0.5,
-                "reasoning": "Generated from non-JSON tool output.",
-            }
-        ]
+        if not isinstance(payload, dict):
+            return {"status": "failed", "parsed_findings": [], "summary": {}}
+
+        findings_value = payload.get("findings")
+        if not isinstance(findings_value, list):
+            return {"status": "failed", "parsed_findings": [], "summary": {}}
+
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        parsed_findings = self._extract_findings_from_json(tool_name, payload)
+        return {"status": "completed", "parsed_findings": parsed_findings, "summary": summary}
 
     def _extract_findings_from_json(self, tool_name: str, payload: object) -> list[dict]:
         raw_findings: list[dict]
-        if isinstance(payload, list):
-            raw_findings = [item for item in payload if isinstance(item, dict)]
-        elif isinstance(payload, dict):
-            findings_value = payload.get("findings")
-            if isinstance(findings_value, list):
-                raw_findings = [item for item in findings_value if isinstance(item, dict)]
-            else:
-                raw_findings = [payload]
-        else:
+        if not isinstance(payload, dict):
             return []
+
+        findings_value = payload.get("findings")
+        if not isinstance(findings_value, list):
+            return []
+        raw_findings = [item for item in findings_value if isinstance(item, dict)]
 
         normalized: list[dict] = []
         for item in raw_findings:
@@ -206,6 +210,7 @@ class ToolRuntime:
                     "tool_provenance": tool_name,
                     "confidence": float(item.get("confidence") or 0.6),
                     "reasoning": str(item.get("reasoning") or "Tool output parsed as JSON."),
+                    "origin_parser": "strict_json",
                 }
             )
         return normalized

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Mapping
 import os
 from pathlib import Path
 import shutil
+from typing import Any
 
 from agentic_layer.scan_graph.logger import log_agent
 from agentic_layer.scan_graph.state import ScanState
@@ -15,6 +17,18 @@ def _build_basic_auth_header(token: str) -> str:
     raw = f"x-access-token:{token}".encode("utf-8")
     encoded = base64.b64encode(raw).decode("utf-8")
     return f"AUTHORIZATION: basic {encoded}"
+
+
+def _token_from_config(config: dict[str, Any] | None) -> str | None:
+    if not isinstance(config, Mapping):
+        return None
+    configurable = config.get("configurable", {})
+    if not isinstance(configurable, Mapping):
+        return None
+    token = configurable.get("github_token")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
 
 
 async def _run_clone(
@@ -56,7 +70,7 @@ async def _run_clone(
     return False, stderr or stdout or "clone failed"
 
 
-async def cloner_node(state: ScanState) -> ScanState:
+async def cloner_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     # Setup/acquisition step: clone code into prepared repository volume.
     log_agent(state["scan_id"], "Cloner", "Starting code acquisition")
     if state["repo_path"] is None:
@@ -71,7 +85,7 @@ async def cloner_node(state: ScanState) -> ScanState:
 
     code_path = Path(state["repo_path"])
     repo_url = state["repo_url"]
-    token = state["github_token"]
+    token = _token_from_config(config)
 
     if code_path.exists():
         for child in code_path.iterdir():
@@ -84,7 +98,7 @@ async def cloner_node(state: ScanState) -> ScanState:
     # If that fails, retry without auth to support public repositories with invalid/expired tokens.
     try:
         success, output = await asyncio.wait_for(
-            _run_clone(repo_url=repo_url, target_path=code_path, token=token, use_auth_header=token is not None),
+            _run_clone(repo_url=repo_url, target_path=code_path, token=token, use_auth_header=bool(token)),
             timeout=90,
         )
     except TimeoutError:

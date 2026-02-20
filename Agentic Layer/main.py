@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from models import ScanRequest
 from models import ScanResponse
@@ -13,6 +14,7 @@ configure_langsmith()
 from agentic_layer.scan_graph.logger import log_agent
 from agentic_layer.scan_graph.graph import execute_scan_workflow
 from agentic_layer.scan_graph.state import build_initial_state
+from agentic_layer.scan_graph.state import merge_state
 from scan_router import scan_router
 from scan_router import scan_service
 
@@ -33,7 +35,7 @@ app.add_middleware(
 
 
 @app.post("/api/scan/validate", response_model=ScanValidationResponse)
-async def validate_scan(request: ScanValidationRequest):
+async def validate_scan(request: ScanValidationRequest, http_request: Request):
     """
     Validate a scan request from the frontend.
 
@@ -68,14 +70,32 @@ async def validate_scan(request: ScanValidationRequest):
     # Trigger LangGraph lifecycle after validation success.
     # This is non-blocking because scan_service schedules the workflow with asyncio.create_task.
     try:
+        auth_header = http_request.headers.get("Authorization", "")
+        header_token: str | None = None
+        if auth_header.lower().startswith("bearer "):
+            maybe_token = auth_header[7:].strip()
+            if maybe_token:
+                header_token = maybe_token
+
+        inbound_token = header_token or (request.github_token.strip() if request.github_token else None)
+
+        if request.project_type == "github":
+            print(f"GitHub Token Present: {'yes' if bool(inbound_token) else 'no'}")
+
         repo_url = request.repository_url or ""
         if not repo_url:
             raise HTTPException(status_code=400, detail="repository_url is required for scan start")
 
+        log_agent(
+            "validation-pre-scan",
+            "ValidationAPI",
+            f"Inbound token present={bool(inbound_token)} for project_id={request.project_id}",
+        )
+
         scan_id = await scan_service.start_scan(
             repo_url=repo_url,
             project_id=request.project_id,
-            github_token=request.github_token,
+            github_token=inbound_token,
         )
     except HTTPException:
         raise
@@ -111,10 +131,11 @@ async def run_scan(request: ScanRequest):
     # without redesigning the rest of the backend.
     initial_state = build_initial_state(
         repo_url=request.repo_url,
-        github_token=request.github_token,
     )
 
-    final_state = await execute_scan_workflow(initial_state)
+    invoke_state = merge_state(initial_state, {"github_token": request.github_token})
+
+    final_state = await execute_scan_workflow(invoke_state)
 
     return ScanResponse(
         scan_id=final_state["scan_id"],

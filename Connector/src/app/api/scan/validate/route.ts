@@ -69,6 +69,14 @@ export async function POST(request: NextRequest) {
         }
         backendPayload.github_token = token;
         backendPayload.repository_url = `https://github.com/${owner}/${repo}`;
+        console.log('[ScanValidateProxy] Token acquired and attached', {
+          project_id,
+          project_type,
+          tokenPresent: Boolean(token && token.trim()),
+          tokenLength: token?.length || 0,
+          owner,
+          repo,
+        });
       } catch (error) {
         console.error('Failed to get GitHub token:', error);
         return NextResponse.json(
@@ -77,6 +85,13 @@ export async function POST(request: NextRequest) {
         );
       }
     }
+
+    console.log('[ScanValidateProxy] Forwarding payload to backend', {
+      project_id,
+      project_type,
+      hasRepositoryUrl: Boolean(backendPayload.repository_url),
+      hasGithubToken: Boolean(backendPayload.github_token),
+    });
 
     // Forward to the backend
     const response = await fetch(`${BACKEND_URL}/api/scan/validate`, {

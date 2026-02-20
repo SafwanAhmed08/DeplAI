@@ -49,10 +49,11 @@ class ScanService:
     def __init__(self) -> None:
         self._registry: dict[str, ScanState] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._ephemeral_tokens: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     async def start_scan(self, repo_url: str, project_id: str, github_token: str | None = None) -> str:
-        initial_state = build_initial_state(repo_url=repo_url, github_token=github_token)
+        initial_state = build_initial_state(repo_url=repo_url)
         started_state = merge_state(
             initial_state,
             {
@@ -65,9 +66,12 @@ class ScanService:
         )
         scan_id = started_state["scan_id"]
         log_agent(scan_id, "ScanService", f"Scan accepted for project_id={project_id}")
+        log_agent(scan_id, "ScanService", f"Token received at start_scan={bool(github_token and github_token.strip())}")
 
         async with self._lock:
             self._registry[scan_id] = started_state
+            if github_token and github_token.strip():
+                self._ephemeral_tokens[scan_id] = github_token.strip()
             self._tasks[scan_id] = asyncio.create_task(self._run_scan(scan_id))
 
         return scan_id
@@ -95,7 +99,14 @@ class ScanService:
         log_agent(scan_id, "ScanService", "Scan state marked as running")
 
         try:
-            final_state = await execute_scan_workflow(running_state)
+            github_token = None
+            async with self._lock:
+                github_token = self._ephemeral_tokens.pop(scan_id, None)
+
+            invoke_state = merge_state(running_state, {"github_token": github_token})
+            log_agent(scan_id, "ScanService", f"Token injected into state before invoke={bool(github_token)}")
+
+            final_state = await execute_scan_workflow(invoke_state)
             final_state = merge_state(
                 final_state,
                 {
@@ -124,6 +135,7 @@ class ScanService:
         finally:
             async with self._lock:
                 self._tasks.pop(scan_id, None)
+                self._ephemeral_tokens.pop(scan_id, None)
             log_agent(scan_id, "ScanService", "Background task cleaned up")
 
     async def get_scan_state(self, scan_id: str) -> ScanState | None:

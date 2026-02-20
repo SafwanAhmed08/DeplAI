@@ -71,11 +71,11 @@ async def mark_hitl_required_node(state: ScanState) -> ScanState:
 
 
 @traceable_if_available(name="master.run_analysis_phase", run_type="chain")
-async def run_analysis_phase_node(state: ScanState) -> ScanState:
+async def run_analysis_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to AnalysisSubgraph")
     started_state = _set_phase_status(state, "analysis_phase", PhaseStatus.RUNNING)
     try:
-        next_state = await analysis_subgraph.ainvoke(started_state)
+        next_state = await analysis_subgraph.ainvoke(started_state, config=config)
     except Exception as exc:  # noqa: BLE001
         return _mark_phase_failed(started_state, "analysis_phase", f"Analysis phase failed: {exc}")
     completed_state = merge_state(next_state, {"analysis_phase": PhaseStatus.COMPLETED.value})
@@ -83,11 +83,11 @@ async def run_analysis_phase_node(state: ScanState) -> ScanState:
 
 
 @traceable_if_available(name="master.run_correlation_decision_phase", run_type="chain")
-async def run_correlation_decision_phase_node(state: ScanState) -> ScanState:
+async def run_correlation_decision_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to CorrelationDecisionSubgraph")
     started_state = _set_phase_status(state, "correlation_phase", PhaseStatus.RUNNING)
     try:
-        next_state = await correlation_subgraph.ainvoke(started_state)
+        next_state = await correlation_subgraph.ainvoke(started_state, config=config)
     except Exception as exc:  # noqa: BLE001
         return _mark_phase_failed(started_state, "correlation_phase", f"Correlation phase failed: {exc}")
     completed_state = merge_state(next_state, {"correlation_phase": PhaseStatus.COMPLETED.value})
@@ -95,11 +95,11 @@ async def run_correlation_decision_phase_node(state: ScanState) -> ScanState:
 
 
 @traceable_if_available(name="master.run_execution_phase", run_type="chain")
-async def run_execution_phase_node(state: ScanState) -> ScanState:
+async def run_execution_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to ExecutionSubgraph")
     started_state = _set_phase_status(state, "execution_phase", PhaseStatus.RUNNING)
     try:
-        next_state = await execution_subgraph.ainvoke(started_state)
+        next_state = await execution_subgraph.ainvoke(started_state, config=config)
     except Exception as exc:  # noqa: BLE001
         return _mark_phase_failed(started_state, "execution_phase", f"Execution phase failed: {exc}")
     completed_state = merge_state(next_state, {"execution_phase": PhaseStatus.COMPLETED.value})
@@ -107,11 +107,11 @@ async def run_execution_phase_node(state: ScanState) -> ScanState:
 
 
 @traceable_if_available(name="master.run_setup_phase", run_type="chain")
-async def run_setup_phase_node(state: ScanState) -> ScanState:
+async def run_setup_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to SetupSubgraph")
     started_state = _set_phase_status(state, "setup_phase", PhaseStatus.RUNNING)
     try:
-        next_state = await setup_subgraph.ainvoke(started_state)
+        next_state = await setup_subgraph.ainvoke(started_state, config=config)
     except Exception as exc:  # noqa: BLE001
         return _mark_phase_failed(started_state, "setup_phase", f"Setup phase failed: {exc}")
     completed_state = merge_state(next_state, {"setup_phase": PhaseStatus.COMPLETED.value})
@@ -119,10 +119,10 @@ async def run_setup_phase_node(state: ScanState) -> ScanState:
 
 
 @traceable_if_available(name="master.run_validation_init_phase", run_type="chain")
-async def run_validation_init_phase_node(state: ScanState) -> ScanState:
+async def run_validation_init_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to ValidationInitSubgraph")
     started_state = append_timeline_event(state, "validation_init_phase", "started")
-    next_state = await validation_init_subgraph.ainvoke(started_state)
+    next_state = await validation_init_subgraph.ainvoke(started_state, config=config)
     next_state = append_timeline_event(next_state, "validation_init_phase", "completed")
     if next_state["errors"]:
         return merge_state(next_state, {"phase": "error"})
