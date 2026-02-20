@@ -3,9 +3,18 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 from datetime import timezone
+from enum import Enum
 from typing import Any
 from typing import TypedDict
 from uuid import uuid4
+
+
+class PhaseStatus(str, Enum):
+    NOT_STARTED = "not_started"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class ScanState(TypedDict):
@@ -25,18 +34,32 @@ class ScanState(TypedDict):
     phase: str
 
     # Analysis phase fields.
+    setup_phase: str
     findings: list[dict[str, Any]]
     raw_tool_outputs: list[dict[str, Any]]
     owasp_mapped: dict[str, list[dict[str, Any]]]
     coverage_gaps: list[str]
     rescans_triggered: bool
     analysis_phase: str
+    analysis_stage: str
     base_scores: dict[str, float]
     correlated_scores: dict[str, float]
     selected_owasp_categories: list[str]
     filtered_categories: list[str]
     execution_plan: list[dict[str, Any]]
     correlation_phase: str
+    correlation_stage: str
+    normalized_findings: list[dict[str, Any]]
+    owasp_categories: list[str]
+    layer6_results: list[dict[str, Any]]
+    final_findings: list[dict[str, Any]]
+    execution_phase: str
+    execution_stage: str
+    artifact_catalog: list[dict[str, Any]]
+    unified_findings: list[dict[str, Any]]
+    dedup_clusters: list[dict[str, Any]]
+    intelligent_findings: list[dict[str, Any]]
+    dedup_phase: str
     phase_timeline: list[dict[str, str]]
 
 
@@ -62,18 +85,32 @@ def build_initial_state(repo_url: str, github_token: str | None = None) -> ScanS
         "requires_hitl": False,
         "errors": [],
         "phase": "master_orchestrator",
+        "setup_phase": PhaseStatus.NOT_STARTED.value,
         "findings": [],
         "raw_tool_outputs": [],
         "owasp_mapped": {},
         "coverage_gaps": [],
         "rescans_triggered": False,
-        "analysis_phase": "not_started",
+        "analysis_phase": PhaseStatus.NOT_STARTED.value,
+        "analysis_stage": "not_started",
         "base_scores": {},
         "correlated_scores": {},
         "selected_owasp_categories": [],
         "filtered_categories": [],
         "execution_plan": [],
-        "correlation_phase": "not_started",
+        "correlation_phase": PhaseStatus.NOT_STARTED.value,
+        "correlation_stage": "not_started",
+        "normalized_findings": [],
+        "owasp_categories": [],
+        "layer6_results": [],
+        "final_findings": [],
+        "execution_phase": PhaseStatus.NOT_STARTED.value,
+        "execution_stage": "not_started",
+        "artifact_catalog": [],
+        "unified_findings": [],
+        "dedup_clusters": [],
+        "intelligent_findings": [],
+        "dedup_phase": PhaseStatus.NOT_STARTED.value,
         "phase_timeline": [
             {
                 "phase": "master_orchestrator",

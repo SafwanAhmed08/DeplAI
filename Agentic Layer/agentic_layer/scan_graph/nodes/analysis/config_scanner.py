@@ -44,4 +44,4 @@ async def config_scanner_node(state: ScanState) -> ScanState:
     ]
 
     log_agent(state["scan_id"], "ConfigScanner", f"Config scan complete with {len(findings)} findings")
-    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_phase": "config_scanned"})
+    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_stage": "config_scanned"})

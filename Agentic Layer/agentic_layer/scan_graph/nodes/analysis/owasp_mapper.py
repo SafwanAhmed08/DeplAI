@@ -30,7 +30,8 @@ async def owasp_mapper_node(state: ScanState) -> ScanState:
         state,
         {
             "owasp_mapped": mapped,
-            "analysis_phase": "owasp_mapped",
+            "owasp_categories": list(mapped.keys()),
+            "analysis_stage": "owasp_mapped",
             "phase": "analysis_completed",
         },
     )

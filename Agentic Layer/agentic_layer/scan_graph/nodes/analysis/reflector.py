@@ -37,7 +37,7 @@ async def reflector_node(state: ScanState) -> ScanState:
         state,
         {
             "coverage_gaps": gaps,
-            "analysis_phase": "reflected",
+            "analysis_stage": "reflected",
         },
     )
 

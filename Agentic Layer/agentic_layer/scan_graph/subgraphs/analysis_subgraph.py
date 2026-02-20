@@ -21,7 +21,7 @@ from agentic_layer.scan_graph.state import ScanState
 def route_after_signal_aggregator(state: ScanState) -> str:
     # First aggregation pass goes to reflector.
     # Post-rescan aggregation goes straight to mapper.
-    if state["analysis_phase"] == "signals_aggregated_after_rescan":
+    if state["analysis_stage"] == "signals_aggregated_after_rescan":
         log_agent(state["scan_id"], "AnalysisSubgraph", "Post-rescan aggregation complete; routing to OWASP mapper")
         return "map"
 

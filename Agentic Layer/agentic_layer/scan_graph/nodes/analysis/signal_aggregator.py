@@ -40,6 +40,13 @@ async def signal_aggregator_node(state: ScanState) -> ScanState:
             dedupe_keys.add(dedupe_key)
             normalized.append(normalized_item)
 
-    next_phase = "signals_aggregated_after_rescan" if state["analysis_phase"] == "rescanned" else "signals_aggregated"
+    next_phase = "signals_aggregated_after_rescan" if state["analysis_stage"] == "rescanned" else "signals_aggregated"
     log_agent(state["scan_id"], "SignalAggregator", f"Aggregation complete with {len(normalized)} normalized findings")
-    return merge_state(state, {"findings": normalized, "analysis_phase": next_phase})
+    return merge_state(
+        state,
+        {
+            "findings": normalized,
+            "normalized_findings": normalized,
+            "analysis_stage": next_phase,
+        },
+    )

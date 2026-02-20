@@ -42,7 +42,7 @@ async def analysis_planner_node(state: ScanState) -> ScanState:
         state,
         {
             "phase": "analysis",
-            "analysis_phase": "planned",
+            "analysis_stage": "planned",
             "repo_metadata": repo_metadata,
         },
     )

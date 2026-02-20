@@ -41,6 +41,6 @@ async def targeted_rescan_node(state: ScanState) -> ScanState:
             "raw_tool_outputs": raw_tool_outputs,
             "rescans_triggered": True,
             "coverage_gaps": [],
-            "analysis_phase": "rescanned",
+            "analysis_stage": "rescanned",
         },
     )

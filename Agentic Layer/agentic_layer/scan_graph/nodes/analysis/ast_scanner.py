@@ -14,7 +14,7 @@ async def ast_scanner_node(state: ScanState) -> ScanState:
 
     repo_path = state["repo_path"]
     if not repo_path:
-        return merge_state(state, {"analysis_phase": "ast_scanned"})
+        return merge_state(state, {"analysis_stage": "ast_scanned"})
 
     findings: list[dict] = []
     for file_path in Path(repo_path).rglob("*.py"):
@@ -55,4 +55,4 @@ async def ast_scanner_node(state: ScanState) -> ScanState:
     ]
 
     log_agent(state["scan_id"], "ASTScanner", f"AST scan complete with {len(findings)} findings")
-    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_phase": "ast_scanned"})
+    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_stage": "ast_scanned"})

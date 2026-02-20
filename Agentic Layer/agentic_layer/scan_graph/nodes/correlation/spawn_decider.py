@@ -22,7 +22,7 @@ async def spawn_decider_node(state: ScanState) -> ScanState:
         state,
         {
             "selected_owasp_categories": selected,
-            "correlation_phase": "spawn_decided",
+            "correlation_stage": "spawn_decided",
         },
     )
 

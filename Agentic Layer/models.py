@@ -46,15 +46,29 @@ class ScanResponse(BaseModel):
     errors: list[str]
     phase: str
     findings: list[dict[str, Any]] = []
+    normalized_findings: list[dict[str, Any]] = []
     raw_tool_outputs: list[dict[str, Any]] = []
     owasp_mapped: dict[str, list[dict[str, Any]]] = {}
+    owasp_categories: list[str] = []
     coverage_gaps: list[str] = []
     rescans_triggered: bool = False
+    setup_phase: str = "not_started"
     analysis_phase: str = "not_started"
+    analysis_stage: str = "not_started"
     base_scores: dict[str, float] = {}
     correlated_scores: dict[str, float] = {}
     selected_owasp_categories: list[str] = []
     filtered_categories: list[str] = []
     execution_plan: list[dict[str, Any]] = []
     correlation_phase: str = "not_started"
+    correlation_stage: str = "not_started"
+    layer6_results: list[dict[str, Any]] = []
+    final_findings: list[dict[str, Any]] = []
+    execution_phase: str = "not_started"
+    execution_stage: str = "not_started"
+    artifact_catalog: list[dict[str, Any]] = []
+    unified_findings: list[dict[str, Any]] = []
+    dedup_clusters: list[dict[str, Any]] = []
+    intelligent_findings: list[dict[str, Any]] = []
+    dedup_phase: str = "not_started"
     phase_timeline: list[dict[str, str]] = []

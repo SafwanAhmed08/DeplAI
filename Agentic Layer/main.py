@@ -7,6 +7,9 @@ from models import ScanValidationRequest
 from models import ScanValidationResponseData
 from models import ScanValidationResponse
 
+from agentic_layer.scan_graph.observability import configure_langsmith
+configure_langsmith()
+
 from agentic_layer.scan_graph.logger import log_agent
 from agentic_layer.scan_graph.graph import execute_scan_workflow
 from agentic_layer.scan_graph.state import build_initial_state
@@ -123,17 +126,31 @@ async def run_scan(request: ScanRequest):
         errors=final_state["errors"],
         phase=final_state["phase"],
         findings=final_state["findings"],
+        normalized_findings=final_state["normalized_findings"],
         raw_tool_outputs=final_state["raw_tool_outputs"],
         owasp_mapped=final_state["owasp_mapped"],
+        owasp_categories=final_state["owasp_categories"],
         coverage_gaps=final_state["coverage_gaps"],
         rescans_triggered=final_state["rescans_triggered"],
+        setup_phase=final_state["setup_phase"],
         analysis_phase=final_state["analysis_phase"],
+        analysis_stage=final_state["analysis_stage"],
         base_scores=final_state["base_scores"],
         correlated_scores=final_state["correlated_scores"],
         selected_owasp_categories=final_state["selected_owasp_categories"],
         filtered_categories=final_state["filtered_categories"],
         execution_plan=final_state["execution_plan"],
         correlation_phase=final_state["correlation_phase"],
+        correlation_stage=final_state["correlation_stage"],
+        layer6_results=final_state["layer6_results"],
+        final_findings=final_state["final_findings"],
+        execution_phase=final_state["execution_phase"],
+        execution_stage=final_state["execution_stage"],
+        artifact_catalog=final_state["artifact_catalog"],
+        unified_findings=final_state["unified_findings"],
+        dedup_clusters=final_state["dedup_clusters"],
+        intelligent_findings=final_state["intelligent_findings"],
+        dedup_phase=final_state["dedup_phase"],
         phase_timeline=final_state["phase_timeline"],
     )
 

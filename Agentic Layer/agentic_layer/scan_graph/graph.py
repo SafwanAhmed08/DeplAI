@@ -5,12 +5,15 @@ from langgraph.graph import START
 from langgraph.graph import StateGraph
 
 from agentic_layer.scan_graph.logger import log_agent
+from agentic_layer.scan_graph.observability import traceable_if_available
 from agentic_layer.scan_graph.nodes.error_handler import error_handler_node
 from agentic_layer.scan_graph.subgraphs.analysis_subgraph import analysis_subgraph
 from agentic_layer.scan_graph.subgraphs.correlation_subgraph import correlation_subgraph
+from agentic_layer.scan_graph.subgraphs.execution_subgraph import execution_subgraph
 from agentic_layer.scan_graph.subgraphs.setup_subgraph import setup_subgraph
 from agentic_layer.scan_graph.subgraphs.validation_init_subgraph import validation_init_subgraph
 from agentic_layer.scan_graph.state import append_timeline_event
+from agentic_layer.scan_graph.state import PhaseStatus
 from agentic_layer.scan_graph.state import ScanState
 from agentic_layer.scan_graph.state import merge_state
 
@@ -32,39 +35,90 @@ def route_after_setup_phase(state: ScanState) -> str:
     return "analysis"
 
 
-async def mark_hitl_required_node(state: ScanState) -> ScanState:
-    next_state = merge_state(
+def _set_phase_status(state: ScanState, phase_field: str, status: PhaseStatus) -> ScanState:
+    next_state = merge_state(state, {phase_field: status.value})
+    return append_timeline_event(next_state, phase_field, status.value)
+
+
+def _mark_phase_failed(state: ScanState, phase_field: str, error_message: str) -> ScanState:
+    failed_state = merge_state(
         state,
         {
-            "phase": "hitl_required",
-            "analysis_phase": "skipped_due_to_size",
-            "correlation_phase": "skipped_due_to_hitl",
+            phase_field: PhaseStatus.FAILED.value,
+            "phase": "error",
+            "errors": [*state["errors"], error_message],
         },
     )
-    return append_timeline_event(next_state, "analysis_phase", "skipped_due_to_hitl")
+    return append_timeline_event(failed_state, phase_field, PhaseStatus.FAILED.value)
 
 
+async def mark_hitl_required_node(state: ScanState) -> ScanState:
+    next_state = _set_phase_status(state, "analysis_phase", PhaseStatus.SKIPPED)
+    next_state = _set_phase_status(next_state, "correlation_phase", PhaseStatus.SKIPPED)
+    next_state = _set_phase_status(next_state, "execution_phase", PhaseStatus.SKIPPED)
+    return merge_state(
+        next_state,
+        {
+            "phase": "hitl_required",
+            "analysis_phase": PhaseStatus.SKIPPED.value,
+            "correlation_phase": PhaseStatus.SKIPPED.value,
+            "execution_phase": PhaseStatus.SKIPPED.value,
+            "analysis_stage": "skipped_due_to_size",
+            "correlation_stage": "skipped_due_to_hitl",
+            "execution_stage": "skipped_due_to_hitl",
+        },
+    )
+
+
+@traceable_if_available(name="master.run_analysis_phase", run_type="chain")
 async def run_analysis_phase_node(state: ScanState) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to AnalysisSubgraph")
-    started_state = append_timeline_event(state, "analysis_phase", "started")
-    next_state = await analysis_subgraph.ainvoke(started_state)
-    return append_timeline_event(next_state, "analysis_phase", "completed")
+    started_state = _set_phase_status(state, "analysis_phase", PhaseStatus.RUNNING)
+    try:
+        next_state = await analysis_subgraph.ainvoke(started_state)
+    except Exception as exc:  # noqa: BLE001
+        return _mark_phase_failed(started_state, "analysis_phase", f"Analysis phase failed: {exc}")
+    completed_state = merge_state(next_state, {"analysis_phase": PhaseStatus.COMPLETED.value})
+    return append_timeline_event(completed_state, "analysis_phase", PhaseStatus.COMPLETED.value)
 
 
+@traceable_if_available(name="master.run_correlation_decision_phase", run_type="chain")
 async def run_correlation_decision_phase_node(state: ScanState) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to CorrelationDecisionSubgraph")
-    started_state = append_timeline_event(state, "correlation_phase", "started")
-    next_state = await correlation_subgraph.ainvoke(started_state)
-    return append_timeline_event(next_state, "correlation_phase", "completed")
+    started_state = _set_phase_status(state, "correlation_phase", PhaseStatus.RUNNING)
+    try:
+        next_state = await correlation_subgraph.ainvoke(started_state)
+    except Exception as exc:  # noqa: BLE001
+        return _mark_phase_failed(started_state, "correlation_phase", f"Correlation phase failed: {exc}")
+    completed_state = merge_state(next_state, {"correlation_phase": PhaseStatus.COMPLETED.value})
+    return append_timeline_event(completed_state, "correlation_phase", PhaseStatus.COMPLETED.value)
 
 
+@traceable_if_available(name="master.run_execution_phase", run_type="chain")
+async def run_execution_phase_node(state: ScanState) -> ScanState:
+    log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to ExecutionSubgraph")
+    started_state = _set_phase_status(state, "execution_phase", PhaseStatus.RUNNING)
+    try:
+        next_state = await execution_subgraph.ainvoke(started_state)
+    except Exception as exc:  # noqa: BLE001
+        return _mark_phase_failed(started_state, "execution_phase", f"Execution phase failed: {exc}")
+    completed_state = merge_state(next_state, {"execution_phase": PhaseStatus.COMPLETED.value})
+    return append_timeline_event(completed_state, "execution_phase", PhaseStatus.COMPLETED.value)
+
+
+@traceable_if_available(name="master.run_setup_phase", run_type="chain")
 async def run_setup_phase_node(state: ScanState) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to SetupSubgraph")
-    started_state = append_timeline_event(state, "setup_phase", "started")
-    next_state = await setup_subgraph.ainvoke(started_state)
-    return append_timeline_event(next_state, "setup_phase", "completed")
+    started_state = _set_phase_status(state, "setup_phase", PhaseStatus.RUNNING)
+    try:
+        next_state = await setup_subgraph.ainvoke(started_state)
+    except Exception as exc:  # noqa: BLE001
+        return _mark_phase_failed(started_state, "setup_phase", f"Setup phase failed: {exc}")
+    completed_state = merge_state(next_state, {"setup_phase": PhaseStatus.COMPLETED.value})
+    return append_timeline_event(completed_state, "setup_phase", PhaseStatus.COMPLETED.value)
 
 
+@traceable_if_available(name="master.run_validation_init_phase", run_type="chain")
 async def run_validation_init_phase_node(state: ScanState) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to ValidationInitSubgraph")
     started_state = append_timeline_event(state, "validation_init_phase", "started")
@@ -83,6 +137,7 @@ def build_master_orchestrator_graph():
     graph.add_node("run_setup_phase", run_setup_phase_node)
     graph.add_node("run_analysis_phase", run_analysis_phase_node)
     graph.add_node("run_correlation_decision_phase", run_correlation_decision_phase_node)
+    graph.add_node("run_execution_phase", run_execution_phase_node)
     graph.add_node("mark_hitl_required", mark_hitl_required_node)
     graph.add_node("error_handler", error_handler_node)
 
@@ -119,6 +174,15 @@ def build_master_orchestrator_graph():
         "run_correlation_decision_phase",
         route_if_error,
         {
+            "ok": "run_execution_phase",
+            "error": "error_handler",
+        },
+    )
+
+    graph.add_conditional_edges(
+        "run_execution_phase",
+        route_if_error,
+        {
             "ok": END,
             "error": "error_handler",
         },
@@ -134,6 +198,7 @@ def build_master_orchestrator_graph():
 master_orchestrator_graph = build_master_orchestrator_graph()
 
 
+@traceable_if_available(name="master.execute_scan_workflow", run_type="chain")
 async def execute_scan_workflow(state: ScanState) -> ScanState:
     # Entry-point used by FastAPI route.
     started_state = append_timeline_event(state, "master_orchestrator", "started")

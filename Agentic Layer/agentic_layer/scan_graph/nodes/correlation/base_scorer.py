@@ -40,6 +40,6 @@ async def base_scorer_node(state: ScanState) -> ScanState:
         {
             "phase": "correlation_decision",
             "base_scores": base_scores,
-            "correlation_phase": "base_scored",
+            "correlation_stage": "base_scored",
         },
     )

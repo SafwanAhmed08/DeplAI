@@ -21,7 +21,7 @@ async def regex_scanner_node(state: ScanState) -> ScanState:
 
     repo_path = state["repo_path"]
     if not repo_path:
-        return merge_state(state, {"analysis_phase": "regex_scanned"})
+        return merge_state(state, {"analysis_stage": "regex_scanned"})
 
     findings: list[dict] = []
     for file_path in Path(repo_path).rglob("*"):
@@ -58,4 +58,4 @@ async def regex_scanner_node(state: ScanState) -> ScanState:
     ]
 
     log_agent(state["scan_id"], "RegexScanner", f"Regex scan complete with {len(findings)} findings")
-    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_phase": "regex_scanned"})
+    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_stage": "regex_scanned"})

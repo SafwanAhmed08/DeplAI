@@ -43,4 +43,4 @@ async def dependency_scanner_node(state: ScanState) -> ScanState:
     ]
 
     log_agent(state["scan_id"], "DependencyScanner", f"Dependency scan complete with {len(findings)} findings")
-    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_phase": "dependency_scanned"})
+    return merge_state(state, {"raw_tool_outputs": raw_tool_outputs, "analysis_stage": "dependency_scanned"})

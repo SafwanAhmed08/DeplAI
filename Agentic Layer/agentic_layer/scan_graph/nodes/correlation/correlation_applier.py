@@ -48,6 +48,6 @@ async def correlation_applier_node(state: ScanState) -> ScanState:
         state,
         {
             "correlated_scores": correlated_scores,
-            "correlation_phase": "correlated",
+            "correlation_stage": "correlated",
         },
     )

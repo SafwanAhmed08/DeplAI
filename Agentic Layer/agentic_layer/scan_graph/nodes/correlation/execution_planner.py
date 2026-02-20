@@ -35,7 +35,7 @@ async def execution_planner_node(state: ScanState) -> ScanState:
         state,
         {
             "execution_plan": execution_plan,
-            "correlation_phase": "planned",
+            "correlation_stage": "planned",
             "phase": "correlation_decision_completed",
         },
     )

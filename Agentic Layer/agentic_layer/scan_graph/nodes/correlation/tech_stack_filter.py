@@ -43,6 +43,6 @@ async def tech_stack_filter_node(state: ScanState) -> ScanState:
         state,
         {
             "filtered_categories": filtered,
-            "correlation_phase": "filtered",
+            "correlation_stage": "filtered",
         },
     )
