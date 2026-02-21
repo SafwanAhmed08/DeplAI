@@ -27,6 +27,10 @@ def route_if_error(state: ScanState) -> str:
 
 
 def route_after_setup_phase(state: ScanState) -> str:
+    if state["phase"] == "error" or state["errors"]:
+        log_agent(state["scan_id"], "MasterOrchestrator", "Setup phase failed; routing to ErrorHandler")
+        return "error"
+
     if state["requires_hitl"]:
         log_agent(state["scan_id"], "MasterOrchestrator", "Setup phase marked requires_hitl=True; skipping analysis pipeline")
         return "hitl"
@@ -114,6 +118,11 @@ async def run_setup_phase_node(state: ScanState, config: dict[str, Any] | None =
         next_state = await setup_subgraph.ainvoke(started_state, config=config)
     except Exception as exc:  # noqa: BLE001
         return _mark_phase_failed(started_state, "setup_phase", f"Setup phase failed: {exc}")
+
+    if next_state["phase"] == "error" or next_state["errors"]:
+        failed_state = merge_state(next_state, {"setup_phase": PhaseStatus.FAILED.value})
+        return append_timeline_event(failed_state, "setup_phase", PhaseStatus.FAILED.value)
+
     completed_state = merge_state(next_state, {"setup_phase": PhaseStatus.COMPLETED.value})
     return append_timeline_event(completed_state, "setup_phase", PhaseStatus.COMPLETED.value)
 
@@ -158,6 +167,7 @@ def build_master_orchestrator_graph():
         {
             "analysis": "run_analysis_phase",
             "hitl": "mark_hitl_required",
+            "error": "error_handler",
         },
     )
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
 
+from agentic_layer.runtime.docker_execution import DockerExecutionHelper
 from agentic_layer.scan_graph.logger import log_agent
 from agentic_layer.scan_graph.state import ScanState
 from agentic_layer.scan_graph.state import merge_state
@@ -20,37 +21,55 @@ LANGUAGE_EXTENSIONS = {
 async def codebase_stats_node(state: ScanState) -> ScanState:
     # Computes file counts, total size, and language breakdown.
     log_agent(state["scan_id"], "CodebaseStats", "Computing codebase statistics")
-    repo_path = state["repo_path"]
     repo_metadata = dict(state["repo_metadata"])
+    code_volume_name = str(state.get("docker_volumes", {}).get("code", "")).strip()
 
-    if repo_path is None:
-        log_agent(state["scan_id"], "CodebaseStats", "Repository path missing, stats failed")
+    if not code_volume_name:
+        log_agent(state["scan_id"], "CodebaseStats", "Code volume missing, stats failed")
         return merge_state(
             state,
             {
                 "phase": "stats_failed",
-                "errors": [*state["errors"], "Repository path missing for stats"],
+                "errors": [*state["errors"], "Code Docker volume missing for stats"],
             },
         )
 
-    path = Path(repo_path)
-    total_files = 0
-    total_size_bytes = 0
-    language_breakdown: dict[str, int] = {}
-
-    for file_path in path.rglob("*"):
-        if not file_path.is_file():
-            continue
-        total_files += 1
-        total_size_bytes += file_path.stat().st_size
-
-        language = LANGUAGE_EXTENSIONS.get(file_path.suffix.lower(), "other")
-        language_breakdown[language] = language_breakdown.get(language, 0) + 1
+    try:
+        result = DockerExecutionHelper.run(
+            scan_id=state["scan_id"],
+            image="alpine",
+            command=[
+                "sh",
+                "-lc",
+                "files=$(find /workspace -type f | wc -l); "
+                "size_kb=$(du -sk /workspace | awk '{print $1}'); "
+                "printf '{\"total_files\":%s,\"total_size_bytes\":%s}\n' \"$files\" \"$((size_kb*1024))\"",
+            ],
+            volume_name=code_volume_name,
+            mount_path="/workspace",
+            workdir="/workspace",
+            read_only=True,
+            network_none=True,
+            timeout_seconds=60,
+            component="CodebaseStats",
+        )
+        output = (result.stdout or "").strip().splitlines()
+        payload = json.loads(output[-1] if output else "{}")
+        total_files = int(payload.get("total_files", 0))
+        total_size_bytes = int(payload.get("total_size_bytes", 0))
+    except Exception as exc:  # noqa: BLE001
+        return merge_state(
+            state,
+            {
+                "phase": "stats_failed",
+                "errors": [*state["errors"], f"Codebase stats failed in container: {exc}"],
+            },
+        )
 
     repo_metadata["stats"] = {
         "total_files": total_files,
         "total_size_bytes": total_size_bytes,
-        "language_breakdown": language_breakdown,
+        "language_breakdown": {},
     }
     log_agent(
         state["scan_id"],

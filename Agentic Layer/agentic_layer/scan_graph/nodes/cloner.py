@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 from collections.abc import Mapping
-import os
-from pathlib import Path
-import shutil
+import json
+import re
 from typing import Any
 
+from agentic_layer.runtime.docker_execution import DockerExecutionHelper
 from agentic_layer.scan_graph.logger import log_agent
 from agentic_layer.scan_graph.state import ScanState
 from agentic_layer.scan_graph.state import merge_state
-
-
-def _build_basic_auth_header(token: str) -> str:
-    raw = f"x-access-token:{token}".encode("utf-8")
-    encoded = base64.b64encode(raw).decode("utf-8")
-    return f"AUTHORIZATION: basic {encoded}"
 
 
 def _token_from_config(config: dict[str, Any] | None) -> str | None:
@@ -31,123 +24,190 @@ def _token_from_config(config: dict[str, Any] | None) -> str | None:
     return None
 
 
-async def _run_clone(
+def _run_clone_in_volume(
+    scan_id: str,
     repo_url: str,
-    target_path: Path,
+    volume_name: str,
     token: str | None,
     use_auth_header: bool,
-) -> tuple[bool, str]:
-    command = [
-        "git",
-        "clone",
-        "--depth",
-        "1",
-        repo_url,
-        str(target_path),
-    ]
-
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"
+) -> dict[str, Any]:
+    clone_script = (
+        "set -eu; "
+        "rm -rf /workspace/code/* /workspace/code/.[!.]* /workspace/code/..?* 2>/dev/null || true; "
+        "mkdir -p /workspace/code; "
+        "git clone --depth 1 \"$REPO_URL\" /workspace/code"
+    )
+    env = {"REPO_URL": repo_url}
 
     if use_auth_header and token:
-        env["GIT_CONFIG_COUNT"] = "1"
-        env["GIT_CONFIG_KEY_0"] = "http.extraheader"
-        env["GIT_CONFIG_VALUE_0"] = _build_basic_auth_header(token)
+        clone_script = (
+            "set -eu; "
+            "rm -rf /workspace/code/* /workspace/code/.[!.]* /workspace/code/..?* 2>/dev/null || true; "
+            "mkdir -p /workspace/code; "
+            "base=${REPO_URL#https://}; "
+            "clone_url=\"https://x-access-token:${GITHUB_TOKEN}@${base}\"; "
+            "git clone --depth 1 \"$clone_url\" /workspace/code"
+        )
+        env["GITHUB_TOKEN"] = token
 
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
+    try:
+        DockerExecutionHelper.run(
+            scan_id=scan_id,
+            image="alpine/git",
+            entrypoint="sh",
+            command=["-lc", clone_script],
+            volume_name=volume_name,
+            mount_path="/workspace/code",
+            workdir="/workspace",
+            read_only=False,
+            network_none=False,
+            timeout_seconds=90,
+            env=env,
+            component="Cloner",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "success": False,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": str(exc),
+            "reason": "git_clone_failed",
+        }
+
+    return {
+        "success": True,
+        "exit_code": 0,
+        "stdout": "clone succeeded",
+        "stderr": "",
+        "reason": "clone_succeeded",
+    }
+
+
+def _clone_volume_with_optional_auth(
+    scan_id: str,
+    repo_url: str,
+    volume_name: str,
+    token: str | None,
+) -> None:
+    result = _run_clone_in_volume(
+        scan_id=scan_id,
+        repo_url=repo_url,
+        volume_name=volume_name,
+        token=token,
+        use_auth_header=bool(token),
     )
-    stdout_bytes, stderr_bytes = await process.communicate()
-    stdout = stdout_bytes.decode("utf-8", errors="replace")
-    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    if result.get("success"):
+        return
 
-    if process.returncode == 0:
-        return True, stdout or "clone succeeded"
+    retry_result = _run_clone_in_volume(
+        scan_id=scan_id,
+        repo_url=repo_url,
+        volume_name=volume_name,
+        token=None,
+        use_auth_header=False,
+    )
+    if retry_result.get("success"):
+        return
 
-    return False, stderr or stdout or "clone failed"
+    raise RuntimeError(str(result.get("stderr") or result.get("stdout") or "clone failed"))
+
+
+def _sanitize_text(text: str) -> str:
+    if not text:
+        return ""
+    redacted = text
+    patterns = [
+        r"gh[pousr]_[A-Za-z0-9_]+",
+        r"lsv2_[A-Za-z0-9_]+",
+        r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+",
+        r"(?i)(token\s*[=:]\s*)[^\s\"']+",
+        r"https://x-access-token:[^@\s]+@",
+    ]
+    for pattern in patterns:
+        redacted = re.sub(pattern, "[REDACTED]", redacted)
+    return redacted[:3000]
 
 
 async def cloner_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
-    # Setup/acquisition step: clone code into prepared repository volume.
+    # Setup/acquisition step: clone code into prepared Docker code volume.
     log_agent(state["scan_id"], "Cloner", "Starting code acquisition")
-    if state["repo_path"] is None:
-        log_agent(state["scan_id"], "Cloner", "Repository path missing, cannot clone")
+    code_volume_name = str(state.get("docker_volumes", {}).get("code", "")).strip()
+    if not code_volume_name:
+        log_agent(state["scan_id"], "Cloner", "Code volume missing, cannot clone")
         return merge_state(
             state,
             {
                 "phase": "clone_failed",
-                "errors": [*state["errors"], "Repository path not initialized"],
+                "errors": [*state["errors"], "Code Docker volume not initialized"],
             },
         )
 
-    code_path = Path(state["repo_path"])
     repo_url = state["repo_url"]
     token = _token_from_config(config)
 
-    if code_path.exists():
-        for child in code_path.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-
-    # First attempt with auth header when a token is present.
-    # If that fails, retry without auth to support public repositories with invalid/expired tokens.
+    # Clone directly into Docker named volume.
     try:
-        success, output = await asyncio.wait_for(
-            _run_clone(repo_url=repo_url, target_path=code_path, token=token, use_auth_header=bool(token)),
-            timeout=90,
+        log_agent(state["scan_id"], "Cloner", "Cloning repository into Docker code volume")
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                _clone_volume_with_optional_auth,
+                state["scan_id"],
+                repo_url,
+                code_volume_name,
+                token,
+            ),
+            timeout=120,
         )
     except TimeoutError:
         log_agent(state["scan_id"], "Cloner", "Clone timed out")
+        structured = {
+            "component": "Cloner",
+            "code": "CLONE_TIMEOUT",
+            "reason": "Repository clone timed out",
+            "exit_code": 124,
+            "stderr": "",
+        }
         return merge_state(
             state,
             {
-                "phase": "clone_failed",
-                "errors": [*state["errors"], "Repository clone timed out"],
+                "phase": "error",
+                "errors": [*state["errors"], json.dumps(structured)],
+            },
+        )
+    except RuntimeError as exc:
+        log_agent(state["scan_id"], "Cloner", "Clone failed")
+        structured = {
+            "component": "Cloner",
+            "code": "CLONE_FAILED",
+            "reason": "git_clone_failed",
+            "exit_code": 1,
+            "stderr": _sanitize_text(str(exc)),
+        }
+        return merge_state(
+            state,
+            {
+                "phase": "error",
+                "errors": [*state["errors"], json.dumps(structured)],
             },
         )
     except Exception as exc:  # noqa: BLE001
         log_agent(state["scan_id"], "Cloner", "Clone process failed to start")
+        structured = {
+            "component": "Cloner",
+            "code": "CLONE_START_FAILED",
+            "reason": "Repository clone failed to start",
+            "exit_code": 1,
+            "stderr": _sanitize_text(str(exc)),
+        }
         return merge_state(
             state,
             {
-                "phase": "clone_failed",
-                "errors": [*state["errors"], f"Repository clone failed to start: {str(exc)[:200]}"],
+                "phase": "error",
+                "errors": [*state["errors"], json.dumps(structured)],
             },
         )
 
-    if not success:
-        if code_path.exists() and any(code_path.iterdir()):
-            for child in code_path.iterdir():
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-
-        retry_success, retry_output = await _run_clone(
-            repo_url=repo_url,
-            target_path=code_path,
-            token=None,
-            use_auth_header=False,
-        )
-        success = retry_success
-        output = retry_output
-
-    if not success:
-        log_agent(state["scan_id"], "Cloner", "Clone failed")
-        return merge_state(
-            state,
-            {
-                "phase": "clone_failed",
-                "errors": [*state["errors"], f"Repository clone failed: {output.strip()[:300]}"],
-            },
-        )
-
-    log_agent(state["scan_id"], "Cloner", f"Clone complete at {code_path}")
+    log_agent(state["scan_id"], "Cloner", "Code successfully loaded into volume")
 
     return merge_state(
         state,

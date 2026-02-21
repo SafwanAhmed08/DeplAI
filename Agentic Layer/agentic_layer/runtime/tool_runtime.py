@@ -4,7 +4,6 @@ import json
 import re
 import subprocess
 import time
-from pathlib import Path
 from typing import Callable
 
 from agentic_layer.scan_graph.logger import log_agent
@@ -49,12 +48,11 @@ class ToolRuntime:
             },
         }
 
-    def run_tool(self, tool_name: str, repo_path: str) -> dict:
-        repo_dir = Path(repo_path).resolve()
+    def run_tool(self, tool_name: str, code_volume_name: str) -> dict:
         if tool_name not in self._tool_specs:
             raise ValueError(f"Unsupported tool_name: {tool_name}")
-        if not repo_dir.exists() or not repo_dir.is_dir():
-            raise ValueError(f"Invalid repo_path: {repo_path}")
+        if not code_volume_name or not code_volume_name.strip():
+            raise ValueError("Invalid code volume name")
 
         tool_spec = self._tool_specs[tool_name]
         image = str(tool_spec["image"])
@@ -77,9 +75,9 @@ class ToolRuntime:
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m",
             "-v",
-            f"{repo_dir}:/workspace:ro",
+            f"{code_volume_name}:/workspace/code:ro",
             "-w",
-            "/workspace",
+            "/workspace/code",
             image,
             *command,
         ]
@@ -252,7 +250,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib; findings=[]; "
-                "files=list(pathlib.Path('/workspace').rglob('*.py'))[:200]; "
+                "files=list(pathlib.Path('/workspace/code').rglob('*.py'))[:200]; "
                 "\nfor p in files:\n"
                 " t=p.read_text(encoding='utf-8',errors='ignore');\n"
                 " if 'chmod(777' in t or 'allow_all' in t.lower():\n"
@@ -267,7 +265,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib; findings=[]; "
-                "targets=list(pathlib.Path('/workspace').rglob('*.y*ml'))[:200]; "
+                "targets=list(pathlib.Path('/workspace/code').rglob('*.y*ml'))[:200]; "
                 "\nfor p in targets:\n"
                 " t=p.read_text(encoding='utf-8',errors='ignore').lower();\n"
                 " if 'public: true' in t or 'anonymous' in t:\n"
@@ -282,7 +280,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib, re; findings=[]; pat=re.compile(r'(AKIA[0-9A-Z]{16}|secret[_-]?key)', re.I); "
-                "files=list(pathlib.Path('/workspace').rglob('*'))[:300]; "
+                "files=list(pathlib.Path('/workspace/code').rglob('*'))[:300]; "
                 "\nfor p in files:\n"
                 " if not p.is_file():\n"
                 "  continue\n"
@@ -299,7 +297,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib; findings=[]; "
-                "files=list(pathlib.Path('/workspace').rglob('.env*'))[:100]; "
+                "files=list(pathlib.Path('/workspace/code').rglob('.env*'))[:100]; "
                 "\nfor p in files:\n"
                 " t=p.read_text(encoding='utf-8',errors='ignore');\n"
                 " if 'password=' in t.lower() or 'token=' in t.lower():\n"
@@ -314,7 +312,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib; findings=[]; "
-                "files=list(pathlib.Path('/workspace').rglob('*.py'))[:200]; "
+                "files=list(pathlib.Path('/workspace/code').rglob('*.py'))[:200]; "
                 "\nfor p in files:\n"
                 " t=p.read_text(encoding='utf-8',errors='ignore');\n"
                 " if 'exec(' in t or 'eval(' in t:\n"
@@ -329,7 +327,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib, re; findings=[]; "
-                "files=list(pathlib.Path('/workspace').rglob('*'))[:250]; "
+                "files=list(pathlib.Path('/workspace/code').rglob('*'))[:250]; "
                 "pat=re.compile(r'(SELECT\\s+.+\\s+FROM|http://|password\\s*=)', re.I); "
                 "\nfor p in files:\n"
                 " if not p.is_file():\n"
@@ -347,7 +345,7 @@ class ToolRuntime:
             "-c",
             (
                 "import json, pathlib; findings=[]; "
-                "files=list(pathlib.Path('/workspace').rglob('*.py'))[:200]; "
+                "files=list(pathlib.Path('/workspace/code').rglob('*.py'))[:200]; "
                 "\nfor p in files:\n"
                 " t=p.read_text(encoding='utf-8',errors='ignore').lower();\n"
                 " if 'request.args' in t and ('execute(' in t or 'subprocess' in t):\n"
@@ -361,7 +359,7 @@ class ToolRuntime:
             "python",
             "-c",
             (
-                "import json, pathlib; files=sum(1 for _ in pathlib.Path('/workspace').rglob('*') if _.is_file()); "
+            "import json, pathlib; files=sum(1 for _ in pathlib.Path('/workspace/code').rglob('*') if _.is_file()); "
                 "print(json.dumps({'findings':[{'title':'Repository scanned','evidence':f'files={files}','severity':'low'}]}))"
             ),
         ]

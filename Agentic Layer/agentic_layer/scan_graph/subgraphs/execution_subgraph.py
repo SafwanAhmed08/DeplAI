@@ -35,6 +35,7 @@ TOOL_WEIGHT = {
 class CategoryExecutionState(TypedDict):
     scan_id: str
     repo_path: str | None
+    code_volume: str | None
     category: str
     base_findings: list[dict[str, Any]]
     category_execution_context: dict[str, Any]
@@ -108,6 +109,7 @@ async def subgraph_init_node(state: CategoryExecutionState) -> CategoryExecution
     context = {
         "category": state["category"],
         "repo_path": state["repo_path"],
+        "code_volume": state["code_volume"],
         "base_finding_count": len(state["base_findings"]),
     }
     return {
@@ -158,10 +160,30 @@ async def tool_prioritizer_node(state: CategoryExecutionState) -> CategoryExecut
 async def docker_executor_node(state: CategoryExecutionState) -> CategoryExecutionState:
     runtime = ToolRuntime(scan_id=state["scan_id"])
     outputs: list[dict[str, Any]] = []
+    code_volume = (state.get("code_volume") or "").strip()
+    if not code_volume:
+        log_agent(state["scan_id"], "DockerExecutor", "Code volume missing for execution")
+        return {
+            **state,
+            "tool_outputs": [
+                {
+                    "tool_name": "volume_missing",
+                    "exit_code": 1,
+                    "execution_time_ms": 0,
+                    "stdout": "",
+                    "stderr": "Code Docker volume not initialized",
+                    "status": "failed",
+                    "parsed_findings": [],
+                    "findings": [],
+                    "confidence_score": 0.0,
+                    "summary": {},
+                }
+            ],
+        }
+
     for tool_name in state["ordered_tools"]:
-        repo_path = state["repo_path"] or ""
         try:
-            result = runtime.run_tool(tool_name=tool_name, repo_path=repo_path)
+            result = runtime.run_tool(tool_name=tool_name, code_volume_name=code_volume)
         except Exception as exc:  # noqa: BLE001
             log_agent(
                 state["scan_id"],
@@ -305,6 +327,7 @@ async def category_subgraph_runner_node(state: ScanState) -> ScanState:
         initial_category_state: CategoryExecutionState = {
             "scan_id": state["scan_id"],
             "repo_path": state["repo_path"],
+            "code_volume": state.get("docker_volumes", {}).get("code"),
             "category": category,
             "base_findings": list(state["owasp_mapped"].get(category, [])),
             "category_execution_context": {},

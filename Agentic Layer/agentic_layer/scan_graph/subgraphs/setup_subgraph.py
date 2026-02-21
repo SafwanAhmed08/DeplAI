@@ -12,6 +12,12 @@ from agentic_layer.scan_graph.nodes.volume_creator import volume_creator_node
 from agentic_layer.scan_graph.state import ScanState
 
 
+def route_after_cloner(state: ScanState) -> str:
+    if state["phase"] == "error" or state["errors"]:
+        return "failed"
+    return "ok"
+
+
 def build_setup_subgraph():
     # Setup subgraph encapsulates Layer 3 (Setup & Acquisition) as one reusable phase.
     graph = StateGraph(ScanState)
@@ -24,7 +30,14 @@ def build_setup_subgraph():
 
     graph.add_edge(START, "volume_creator")
     graph.add_edge("volume_creator", "cloner")
-    graph.add_edge("cloner", "codebase_stats")
+    graph.add_conditional_edges(
+        "cloner",
+        route_after_cloner,
+        {
+            "ok": "codebase_stats",
+            "failed": END,
+        },
+    )
     graph.add_edge("codebase_stats", "memory_loader")
     graph.add_edge("memory_loader", "size_checker")
     graph.add_edge("size_checker", END)
