@@ -172,6 +172,11 @@ async def run_scan(request: ScanRequest):
         dedup_clusters=final_state["dedup_clusters"],
         intelligent_findings=final_state["intelligent_findings"],
         dedup_phase=final_state["dedup_phase"],
+        cleanup_status=final_state["cleanup_status"],
+        telemetry=final_state["telemetry"],
+        audit_record=final_state["audit_record"],
+        external_report=final_state["external_report"],
+        external_exports=final_state["external_exports"],
         phase_timeline=final_state["phase_timeline"],
     )
 

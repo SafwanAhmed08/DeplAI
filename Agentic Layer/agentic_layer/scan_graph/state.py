@@ -23,6 +23,13 @@ class SecurityError(RuntimeError):
     pass
 
 
+class CleanupStatus(TypedDict):
+    persistence_completed: bool
+    persisted_count: int
+    volume_removed: bool
+    completed: bool
+
+
 class ScanState(TypedDict):
     # Core identity and source information.
     scan_id: str
@@ -66,6 +73,11 @@ class ScanState(TypedDict):
     dedup_clusters: list[dict[str, Any]]
     intelligent_findings: list[dict[str, Any]]
     dedup_phase: str
+    cleanup_status: CleanupStatus
+    telemetry: dict[str, Any]
+    audit_record: dict[str, Any]
+    external_report: dict[str, Any]
+    external_exports: dict[str, Any]
     phase_timeline: list[dict[str, str]]
 
 
@@ -133,6 +145,26 @@ def build_initial_state(repo_url: str) -> ScanState:
         "dedup_clusters": [],
         "intelligent_findings": [],
         "dedup_phase": PhaseStatus.NOT_STARTED.value,
+        "cleanup_status": {
+            "persistence_completed": False,
+            "persisted_count": 0,
+            "volume_removed": False,
+            "completed": False,
+        },
+        "telemetry": {
+            "scan_summary": {},
+            "intelligence_summary": {},
+        },
+        "audit_record": {},
+        "external_report": {
+            "executive_summary": {},
+            "security_posture": {},
+        },
+        "external_exports": {
+            "json_export": {},
+            "markdown_report": "",
+            "compact_summary_blob": {},
+        },
         "phase_timeline": [
             {
                 "phase": "master_orchestrator",

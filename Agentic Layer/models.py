@@ -71,4 +71,24 @@ class ScanResponse(BaseModel):
     dedup_clusters: list[dict[str, Any]] = []
     intelligent_findings: list[dict[str, Any]] = []
     dedup_phase: str = "not_started"
+    cleanup_status: dict[str, Any] = {
+        "persistence_completed": False,
+        "persisted_count": 0,
+        "volume_removed": False,
+        "completed": False,
+    }
+    telemetry: dict[str, Any] = {
+        "scan_summary": {},
+        "intelligence_summary": {},
+    }
+    audit_record: dict[str, Any] = {}
+    external_report: dict[str, Any] = {
+        "executive_summary": {},
+        "security_posture": {},
+    }
+    external_exports: dict[str, Any] = {
+        "json_export": {},
+        "markdown_report": "",
+        "compact_summary_blob": {},
+    }
     phase_timeline: list[dict[str, str]] = []

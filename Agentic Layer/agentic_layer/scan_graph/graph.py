@@ -5,12 +5,16 @@ from langgraph.graph import START
 from langgraph.graph import StateGraph
 
 from agentic_layer.scan_graph.logger import log_agent
+from agentic_layer.scan_graph.nodes.cleanup.final_event_dispatcher import final_event_dispatcher_node
 from agentic_layer.scan_graph.observability import traceable_if_available
 from agentic_layer.scan_graph.nodes.error_handler import error_handler_node
 from agentic_layer.scan_graph.subgraphs.analysis_subgraph import analysis_subgraph
+from agentic_layer.scan_graph.subgraphs.cleanup_subgraph import cleanup_subgraph
 from agentic_layer.scan_graph.subgraphs.correlation_subgraph import correlation_subgraph
 from agentic_layer.scan_graph.subgraphs.execution_subgraph import execution_subgraph
+from agentic_layer.scan_graph.subgraphs.observability_subgraph import observability_subgraph
 from agentic_layer.scan_graph.subgraphs.setup_subgraph import setup_subgraph
+from agentic_layer.scan_graph.subgraphs.strategic_interface_subgraph import strategic_interface_subgraph
 from agentic_layer.scan_graph.subgraphs.validation_init_subgraph import validation_init_subgraph
 from agentic_layer.scan_graph.state import append_timeline_event
 from agentic_layer.scan_graph.state import PhaseStatus
@@ -37,6 +41,19 @@ def route_after_setup_phase(state: ScanState) -> str:
 
     log_agent(state["scan_id"], "MasterOrchestrator", "Entering analysis pipeline")
     return "analysis"
+
+
+def route_after_cleanup_phase(state: ScanState) -> str:
+    return "ok"
+
+
+def route_after_final_event_phase(state: ScanState) -> str:
+    cleanup_status = dict(state.get("cleanup_status", {}))
+    persistence_completed = bool(cleanup_status.get("persistence_completed"))
+    if not persistence_completed:
+        log_agent(state["scan_id"], "MasterOrchestrator", "Cleanup persistence incomplete; routing to ErrorHandler")
+        return "error"
+    return "ok"
 
 
 def _set_phase_status(state: ScanState, phase_field: str, status: PhaseStatus) -> ScanState:
@@ -110,6 +127,56 @@ async def run_execution_phase_node(state: ScanState, config: dict[str, Any] | No
     return append_timeline_event(completed_state, "execution_phase", PhaseStatus.COMPLETED.value)
 
 
+@traceable_if_available(name="master.run_cleanup_phase", run_type="chain")
+async def run_cleanup_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
+    log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to CleanupSubgraph")
+    started_state = append_timeline_event(state, "cleanup_phase", "started")
+    try:
+        next_state = await cleanup_subgraph.ainvoke(started_state, config=config)
+    except Exception as exc:  # noqa: BLE001
+        failed_state = merge_state(
+            started_state,
+            {
+                "phase": "error",
+                "errors": [*started_state["errors"], f"Cleanup phase failed: {exc}"],
+            },
+        )
+        return append_timeline_event(failed_state, "cleanup_phase", "failed")
+    return append_timeline_event(next_state, "cleanup_phase", "completed")
+
+
+@traceable_if_available(name="master.run_observability_phase", run_type="chain")
+async def run_observability_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
+    log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to ObservabilitySubgraph")
+    started_state = append_timeline_event(state, "observability_phase", "started")
+    try:
+        next_state = await observability_subgraph.ainvoke(started_state, config=config)
+    except Exception as exc:  # noqa: BLE001
+        log_agent(state["scan_id"], "Layer10", f"Observability phase failed (non-blocking): {exc}")
+        return append_timeline_event(started_state, "observability_phase", "failed")
+    return append_timeline_event(next_state, "observability_phase", "completed")
+
+
+@traceable_if_available(name="master.run_strategic_interface_phase", run_type="chain")
+async def run_strategic_interface_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
+    log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to StrategicInterfaceSubgraph")
+    started_state = append_timeline_event(state, "strategic_interface_phase", "started")
+    try:
+        next_state = await strategic_interface_subgraph.ainvoke(started_state, config=config)
+    except Exception as exc:  # noqa: BLE001
+        log_agent(state["scan_id"], "Layer11", f"Strategic interface phase failed (non-blocking): {exc}")
+        return append_timeline_event(started_state, "strategic_interface_phase", "failed")
+    return append_timeline_event(next_state, "strategic_interface_phase", "completed")
+
+
+@traceable_if_available(name="master.run_final_event_phase", run_type="chain")
+async def run_final_event_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
+    log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to FinalEventDispatcher")
+    started_state = append_timeline_event(state, "final_event_phase", "started")
+    next_state = await final_event_dispatcher_node(started_state)
+    return append_timeline_event(next_state, "final_event_phase", "completed")
+
+
 @traceable_if_available(name="master.run_setup_phase", run_type="chain")
 async def run_setup_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to SetupSubgraph")
@@ -147,6 +214,10 @@ def build_master_orchestrator_graph():
     graph.add_node("run_analysis_phase", run_analysis_phase_node)
     graph.add_node("run_correlation_decision_phase", run_correlation_decision_phase_node)
     graph.add_node("run_execution_phase", run_execution_phase_node)
+    graph.add_node("run_cleanup_phase", run_cleanup_phase_node)
+    graph.add_node("run_observability_phase", run_observability_phase_node)
+    graph.add_node("run_strategic_interface_phase", run_strategic_interface_phase_node)
+    graph.add_node("run_final_event_phase", run_final_event_phase_node)
     graph.add_node("mark_hitl_required", mark_hitl_required_node)
     graph.add_node("error_handler", error_handler_node)
 
@@ -193,12 +264,33 @@ def build_master_orchestrator_graph():
         "run_execution_phase",
         route_if_error,
         {
-            "ok": END,
+            "ok": "run_cleanup_phase",
             "error": "error_handler",
         },
     )
 
-    graph.add_edge("mark_hitl_required", END)
+    graph.add_edge("mark_hitl_required", "run_cleanup_phase")
+
+    graph.add_conditional_edges(
+        "run_cleanup_phase",
+        route_after_cleanup_phase,
+        {
+            "ok": "run_observability_phase",
+            "error": "error_handler",
+        },
+    )
+
+    graph.add_edge("run_observability_phase", "run_strategic_interface_phase")
+    graph.add_edge("run_strategic_interface_phase", "run_final_event_phase")
+
+    graph.add_conditional_edges(
+        "run_final_event_phase",
+        route_after_final_event_phase,
+        {
+            "ok": END,
+            "error": "error_handler",
+        },
+    )
 
     graph.add_edge("error_handler", END)
 
