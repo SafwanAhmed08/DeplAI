@@ -48,6 +48,7 @@ class ScanState(TypedDict):
 
     # Analysis phase fields.
     setup_phase: str
+    hitl_phase: str
     findings: list[dict[str, Any]]
     raw_tool_outputs: list[dict[str, Any]]
     owasp_mapped: dict[str, list[dict[str, Any]]]
@@ -120,6 +121,7 @@ def build_initial_state(repo_url: str) -> ScanState:
         "errors": [],
         "phase": "master_orchestrator",
         "setup_phase": PhaseStatus.NOT_STARTED.value,
+        "hitl_phase": PhaseStatus.NOT_STARTED.value,
         "findings": [],
         "raw_tool_outputs": [],
         "owasp_mapped": {},

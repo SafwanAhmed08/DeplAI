@@ -45,11 +45,24 @@ class ScanResultsResponse(BaseModel):
     state: dict[str, Any]
 
 
+class HitlDecisionRequest(BaseModel):
+    decision: str = Field(..., examples=["approve", "reject"])
+    actor: str | None = Field(default=None, examples=["user-123"])
+    reason: str | None = Field(default=None, examples=["Repo is trusted and scan should continue"])
+
+
+class HitlDecisionResponse(BaseModel):
+    scan_id: str
+    accepted: bool
+    decision: str
+
+
 class ScanService:
     def __init__(self) -> None:
         self._registry: dict[str, ScanState] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._ephemeral_tokens: dict[str, str] = {}
+        self._hitl_decisions: dict[str, dict[str, str]] = {}
         self._lock = asyncio.Lock()
 
     async def start_scan(self, repo_url: str, project_id: str, github_token: str | None = None) -> str:
@@ -106,7 +119,15 @@ class ScanService:
             invoke_state = merge_state(running_state, {"github_token": github_token})
             log_agent(scan_id, "ScanService", f"Token injected into state before invoke={bool(github_token)}")
 
-            final_state = await execute_scan_workflow(invoke_state)
+            final_state = await execute_scan_workflow(
+                invoke_state,
+                config={
+                    "configurable": {
+                        "github_token": github_token,
+                        "hitl_decision_provider": self.get_hitl_decision,
+                    }
+                },
+            )
             final_state = merge_state(
                 final_state,
                 {
@@ -136,7 +157,55 @@ class ScanService:
             async with self._lock:
                 self._tasks.pop(scan_id, None)
                 self._ephemeral_tokens.pop(scan_id, None)
+                self._hitl_decisions.pop(scan_id, None)
             log_agent(scan_id, "ScanService", "Background task cleaned up")
+
+    def get_hitl_decision(self, scan_id: str) -> dict[str, str] | None:
+        return self._hitl_decisions.get(scan_id)
+
+    async def submit_hitl_decision(
+        self,
+        scan_id: str,
+        decision: str,
+        actor: str | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        normalized = decision.strip().lower()
+        if normalized not in {"approve", "reject"}:
+            return False
+
+        async with self._lock:
+            if scan_id not in self._registry:
+                return False
+
+            self._hitl_decisions[scan_id] = {
+                "decision": normalized,
+                "source": "user",
+                "actor": (actor or "unknown").strip() or "unknown",
+                "reason": (reason or "").strip(),
+            }
+
+            current_state = self._registry[scan_id]
+            hitl_meta = {
+                **current_state.get("repo_metadata", {}).get("hitl", {}),
+                "decision": normalized,
+                "decision_source": "user",
+                "decision_actor": (actor or "unknown").strip() or "unknown",
+                "decision_reason": (reason or "").strip(),
+            }
+            updated_state = merge_state(
+                current_state,
+                {
+                    "repo_metadata": {
+                        **current_state["repo_metadata"],
+                        "hitl": hitl_meta,
+                    }
+                },
+            )
+            self._registry[scan_id] = updated_state
+
+        log_agent(scan_id, "ScanService", f"HITL decision submitted decision={normalized}")
+        return True
 
     async def get_scan_state(self, scan_id: str) -> ScanState | None:
         async with self._lock:
@@ -224,3 +293,18 @@ async def get_scan_results(scan_id: str) -> ScanResultsResponse:
     log_agent(scan_id, "ScanAPI", f"GET /scan/{scan_id}/results -> {results_view['status']}")
 
     return ScanResultsResponse(**results_view)
+
+
+@scan_router.post("/scan/{scan_id}/hitl-decision", response_model=HitlDecisionResponse)
+async def submit_hitl_decision(scan_id: str, payload: HitlDecisionRequest) -> HitlDecisionResponse:
+    accepted = await scan_service.submit_hitl_decision(
+        scan_id=scan_id,
+        decision=payload.decision,
+        actor=payload.actor,
+        reason=payload.reason,
+    )
+    if not accepted:
+        raise HTTPException(status_code=400, detail="Invalid decision or scan not found")
+
+    log_agent(scan_id, "ScanAPI", f"POST /scan/{scan_id}/hitl-decision accepted")
+    return HitlDecisionResponse(scan_id=scan_id, accepted=True, decision=payload.decision.strip().lower())

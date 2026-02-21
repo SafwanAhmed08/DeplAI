@@ -154,6 +154,7 @@ async def run_scan(request: ScanRequest):
         coverage_gaps=final_state["coverage_gaps"],
         rescans_triggered=final_state["rescans_triggered"],
         setup_phase=final_state["setup_phase"],
+        hitl_phase=final_state["hitl_phase"],
         analysis_phase=final_state["analysis_phase"],
         analysis_stage=final_state["analysis_stage"],
         base_scores=final_state["base_scores"],

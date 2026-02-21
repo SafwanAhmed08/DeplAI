@@ -12,6 +12,7 @@ from agentic_layer.scan_graph.subgraphs.analysis_subgraph import analysis_subgra
 from agentic_layer.scan_graph.subgraphs.cleanup_subgraph import cleanup_subgraph
 from agentic_layer.scan_graph.subgraphs.correlation_subgraph import correlation_subgraph
 from agentic_layer.scan_graph.subgraphs.execution_subgraph import execution_subgraph
+from agentic_layer.scan_graph.subgraphs.hitl_subgraph import hitl_subgraph
 from agentic_layer.scan_graph.subgraphs.observability_subgraph import observability_subgraph
 from agentic_layer.scan_graph.subgraphs.setup_subgraph import setup_subgraph
 from agentic_layer.scan_graph.subgraphs.strategic_interface_subgraph import strategic_interface_subgraph
@@ -45,6 +46,22 @@ def route_after_setup_phase(state: ScanState) -> str:
 
 def route_after_cleanup_phase(state: ScanState) -> str:
     return "ok"
+
+
+def route_after_hitl_phase(state: ScanState) -> str:
+    if state["phase"] == "error" or state["errors"]:
+        log_agent(state["scan_id"], "MasterOrchestrator", "HITL phase failed; routing to ErrorHandler")
+        return "error"
+
+    hitl_meta = state.get("repo_metadata", {}).get("hitl", {})
+    decision = str(hitl_meta.get("decision", "")).strip().lower()
+
+    if decision == "reject":
+        log_agent(state["scan_id"], "MasterOrchestrator", "HITL rejected scan continuation; routing to cleanup")
+        return "cleanup"
+
+    log_agent(state["scan_id"], "MasterOrchestrator", "HITL approved continuation; entering analysis pipeline")
+    return "analysis"
 
 
 def route_after_final_event_phase(state: ScanState) -> str:
@@ -89,6 +106,19 @@ async def mark_hitl_required_node(state: ScanState) -> ScanState:
             "execution_stage": "skipped_due_to_hitl",
         },
     )
+
+
+@traceable_if_available(name="master.run_hitl_phase", run_type="chain")
+async def run_hitl_phase_node(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
+    log_agent(state["scan_id"], "MasterOrchestrator", "Delegating to HITLSubgraph")
+    started_state = _set_phase_status(state, "hitl_phase", PhaseStatus.RUNNING)
+    try:
+        next_state = await hitl_subgraph.ainvoke(started_state, config=config)
+    except Exception as exc:  # noqa: BLE001
+        return _mark_phase_failed(started_state, "hitl_phase", f"HITL phase failed: {exc}")
+
+    completed_state = merge_state(next_state, {"hitl_phase": PhaseStatus.COMPLETED.value})
+    return append_timeline_event(completed_state, "hitl_phase", PhaseStatus.COMPLETED.value)
 
 
 @traceable_if_available(name="master.run_analysis_phase", run_type="chain")
@@ -214,11 +244,11 @@ def build_master_orchestrator_graph():
     graph.add_node("run_analysis_phase", run_analysis_phase_node)
     graph.add_node("run_correlation_decision_phase", run_correlation_decision_phase_node)
     graph.add_node("run_execution_phase", run_execution_phase_node)
+    graph.add_node("run_hitl_phase", run_hitl_phase_node)
     graph.add_node("run_cleanup_phase", run_cleanup_phase_node)
     graph.add_node("run_observability_phase", run_observability_phase_node)
     graph.add_node("run_strategic_interface_phase", run_strategic_interface_phase_node)
     graph.add_node("run_final_event_phase", run_final_event_phase_node)
-    graph.add_node("mark_hitl_required", mark_hitl_required_node)
     graph.add_node("error_handler", error_handler_node)
 
     graph.add_edge(START, "run_validation_init_phase")
@@ -237,7 +267,17 @@ def build_master_orchestrator_graph():
         route_after_setup_phase,
         {
             "analysis": "run_analysis_phase",
-            "hitl": "mark_hitl_required",
+            "hitl": "run_hitl_phase",
+            "error": "error_handler",
+        },
+    )
+
+    graph.add_conditional_edges(
+        "run_hitl_phase",
+        route_after_hitl_phase,
+        {
+            "analysis": "run_analysis_phase",
+            "cleanup": "run_cleanup_phase",
             "error": "error_handler",
         },
     )
@@ -269,8 +309,6 @@ def build_master_orchestrator_graph():
         },
     )
 
-    graph.add_edge("mark_hitl_required", "run_cleanup_phase")
-
     graph.add_conditional_edges(
         "run_cleanup_phase",
         route_after_cleanup_phase,
@@ -301,11 +339,11 @@ master_orchestrator_graph = build_master_orchestrator_graph()
 
 
 @traceable_if_available(name="master.execute_scan_workflow", run_type="chain")
-async def execute_scan_workflow(state: ScanState) -> ScanState:
+async def execute_scan_workflow(state: ScanState, config: dict[str, Any] | None = None) -> ScanState:
     # Entry-point used by FastAPI route.
     started_state = append_timeline_event(state, "master_orchestrator", "started")
     log_agent(started_state["scan_id"], "MasterOrchestrator", "Workflow execution started")
-    final_state = await master_orchestrator_graph.ainvoke(started_state)
+    final_state = await master_orchestrator_graph.ainvoke(started_state, config=config)
     final_state = append_timeline_event(final_state, "master_orchestrator", "completed")
     log_agent(
         final_state["scan_id"],

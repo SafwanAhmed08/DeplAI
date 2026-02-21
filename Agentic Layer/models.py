@@ -53,6 +53,7 @@ class ScanResponse(BaseModel):
     coverage_gaps: list[str] = []
     rescans_triggered: bool = False
     setup_phase: str = "not_started"
+    hitl_phase: str = "not_started"
     analysis_phase: str = "not_started"
     analysis_stage: str = "not_started"
     base_scores: dict[str, float] = {}
